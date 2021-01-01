@@ -1,6 +1,6 @@
 [package]
 name = "fakewrite"
-version = "1.0.0"
+version = "0.1.0"
 authors = ["Diegovsky <diegocastro169169@gmail.com>"]
 edition = "2018"
 build = "build/build.rs"
@@ -14,6 +14,7 @@ anyhow = "1.0"
 clap = "3.0.0-beta.1"
 fern = "0.6"
 log = "0.4"
+libc = "0.2.80"
 
 [build-dependencies]
 bindgen = "0.55"

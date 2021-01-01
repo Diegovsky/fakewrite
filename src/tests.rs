@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use crate::syscall::UString;
+use crate::ustring::UString;
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::path::Path;
 

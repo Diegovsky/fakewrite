@@ -1,17 +1,16 @@
-use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 
-use nix::fcntl::{self, OFlag};
+use nix::fcntl::{self};
 use nix::sys::ptrace;
-use nix::unistd::{self, Pid};
+use nix::unistd::{Pid};
 
 use anyhow::{Context, Result};
 
-pub mod consts;
-mod ustring;
+use crate::operations::*;
+use crate::ustring::*;
+// use crate::mylog::prelude::*;
 
-pub use crate::logs::*;
-pub use ustring::*;
+mod system;
 
 include!(concat!(env!("OUT_DIR"), "/systemcalls.rs"));
 
@@ -28,50 +27,32 @@ macro_rules! catch_exit {
     };
 }
 
-pub fn read_cstr_in_process(ptr: u64, pid: Pid) -> UString {
-    let ptr = ptr as *const u8;
-    const PROB_MAX_PATH: usize = 256;
-    const SIZE: usize = std::mem::size_of::<usize>();
 
-    // Allocating a buffer to read the cstring.
-    let mut buf: Vec<u8> = Vec::with_capacity(PROB_MAX_PATH);
-    'main: for i in (0..PROB_MAX_PATH).step_by(SIZE) {
-        let word = unsafe {
-            // The program will never write memory, so this cast is safe
-            match ptrace::read(pid, ptr.offset(i as isize) as *mut _) {
-                Ok(val) => val as usize,
-                Err(_) => break,
-            }
-        };
-        for j in 0..SIZE {
-            let byte = (word >> (j * 8)) as u8;
-            if byte == 0 {
-                break 'main;
-            }
-            buf.push(byte);
-        }
-    }
-    buf.shrink_to_fit();
-    UString::from_vec(buf)
+pub fn write_syscall(info: Write, pid: Pid, oplog: &mut OperationLogger) -> Result<()> {
+    let fname = filename_from_fd(info.fd, pid)?;
+    let buf = DataIterator::new(info.buf as *const u8, info.count as usize, pid).collect();
+    let text = String::from_utf8(buf).ok();
+    oplog.log(fname, Op::Write(text));
+    Ok(())
 }
 
-pub fn from_fd<'a>(fd: i64, pid: Pid) -> Result<UString> {
-    fcntl::readlink(format!("/proc/{}/fd/{}", pid, fd).as_str())
-        .map(UString::from_os_str)
-        .context("Couldn't get filename from file descriptor.")
+pub fn creat_syscall(info: Creat, pid: Pid, oplog: &mut OperationLogger) {
+    oplog.log(read_string_from_proc(info.pathname as *const u8, pid), Op::Created);
 }
-
-pub(crate) fn open_call(file: u64, flags: u64, pid: Pid, oplog: &mut OperationLogger) -> Result<()> {
-    let flags = flags as i32;
-    if flags != OFlag::O_RDONLY.bits() {
-        let path = &solve_path(read_cstr_in_process(file, pid).as_path())?;
-        if (flags & (OFlag::O_APPEND.bits() | OFlag::O_CREAT.bits())) != 0 {
-            match unistd::access(path, unistd::AccessFlags::F_OK) {
-                Ok(_) => (),
-                Err(_) => oplog.log(UString::from(path.as_path()), Op::Created),
-            }
-        }
+pub fn open_syscall(info: Open, pid: Pid, oplog: &mut OperationLogger) {
+    let fpath = read_string_from_proc(info.filename as *const u8, pid);
+    if !fpath.as_path().exists() {
+        oplog.log(fpath, Op::Created);
     }
+}
+pub fn openat_syscall(info: Openat, pid: Pid, oplog: &mut OperationLogger) {
+
+}
+/// This function handles the `unlink` Linux system call
+pub(crate) fn unlink_syscall(unlink: Unlink, pid: Pid, logger: &mut OperationLogger) -> Result<()> {
+    let filename = read_string_from_proc(unlink.pathname as *const u8, pid);
+    filename.as_path().canonicalize()
+        .map(|p| logger.log(filename, Op::Deleted))?;
     Ok(())
 }
 
@@ -99,38 +80,59 @@ pub(crate) fn solve_path<P: AsRef<Path>>(path: P) -> anyhow::Result<PathBuf> {
     Ok(buf)
 }
 
-/// This function handles the `unlink` Linux system call
-pub(crate) fn unlink(filename: u64, pid: Pid, logger: &mut OperationLogger) -> Result<()> {
-    let filename = read_cstr_in_process(filename, pid);
-    let path = filename.as_path();
-    path.canonicalize()
-        .map(|p| logger.log(UString::from(p.as_path()), Op::Deleted))?;
-    Ok(())
-}
-
-pub(crate) fn openat_call(
-    fd: u64,
-    filename: u64,
-    flags: u64,
+struct DataIterator {
     pid: Pid,
-    logger: &mut OperationLogger,
-) -> Result<()> {
-    let flags = flags as i32;
-    let filename = read_cstr_in_process(filename as u64, pid);
-
-    if flags != OFlag::O_RDONLY.bits() {
-        let mut path = PathBuf::from(filename.as_os_str());
-        if fd as i32 == consts::AT_FDCWD {
-            path = std::env::current_dir()?.join(&path);
-        } else {
-            from_fd(fd as i64, pid).map(|rel_path| rel_path.as_path().join(&path));
-        }
-        if flags & (OFlag::O_CREAT).bits() != 0 {
-            match unistd::access(&path, unistd::AccessFlags::F_OK) {
-                Ok(_) => (),
-                Err(_) => logger.log(UString::from(path.as_path()), Op::Created),
-            };
+    ptr: *const u8,
+    value: usize,
+    index: usize,
+    size: Option<usize>
+}
+impl DataIterator {
+    const WORD_SIZE: usize = std::mem::size_of::<usize>();
+    pub fn new(ptr: *const u8, size: impl Into<Option<usize>>, pid: Pid) -> DataIterator {
+        Self {
+            pid,
+            ptr: ptr,
+            index: 0,
+            value: 0,
+            size: size.into()
         }
     }
-    Ok(())
+}
+impl Iterator for DataIterator {
+    type Item = u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.size.map(|s| s <= self.index) == Some(true){
+            return None
+        }
+        let i = self.index % Self::WORD_SIZE;
+        if i == 0 {
+            unsafe {
+                self.value = ptrace::read(self.pid, self.ptr.add(self.index) as *mut _).ok()? as usize;
+            }
+        }
+        let r = (self.value >> 8*i) as u8;
+        self.index += 1;
+        Some(r)
+    }
+}
+
+pub fn read_string_from_proc(ptr: *const u8, pid: Pid) -> UString {
+    let mut buf: Vec<u8> = Vec::with_capacity(64);
+
+    for byte in DataIterator::new(ptr, None, pid) {
+        if byte == 0 {
+            break
+        } else {
+            buf.push(byte);
+        }
+    }
+    UString::from_vec(buf)
+}
+
+
+pub fn filename_from_fd<'a>(fd: i32, pid: Pid) -> Result<UString> {
+    fcntl::readlink(format!("/proc/{}/fd/{}", pid, fd).as_str())
+        .map(UString::from_os_str)
+        .context("Couldn't get filename from file descriptor.")
 }

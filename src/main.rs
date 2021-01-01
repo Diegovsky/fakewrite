@@ -10,12 +10,16 @@ use nix::sys::{
 use nix::unistd::{self, ForkResult};
 use nix::Error;
 
-mod logs;
+mod operations;
 mod syscall;
+mod ustring;
+mod mylog;
 
-use logs::*;
+use operations::*;
+use syscall::SystemCall;
+use mylog::prelude::*;
 
-fn tracer(pid: unistd::Pid, logger: &mut OperationLogger) -> Result<()> {
+fn tracer(pid: unistd::Pid, oplog: &mut OperationLogger) -> Result<()> {
     wait::waitpid(pid, None).context("Couldn't wait for child")?;
     ptrace::setoptions(
         pid,
@@ -35,21 +39,28 @@ fn tracer(pid: unistd::Pid, logger: &mut OperationLogger) -> Result<()> {
                     std::mem::transmute(val)
                 };
                 if val == Event::PTRACE_EVENT_FORK {
-                    tracer(pid, logger).context("Could not trace child of child")?;
+                    tracer(pid, oplog).context("Could not trace child of child")?;
                 }
             }
             WaitStatus::PtraceEvent(_, _, _) => println!("uh oh"),
-            WaitStatus::Signaled(pid, sig, bol) => println!("mood: {} {} {}", pid, sig, bol),
+            WaitStatus::Signaled(pid, sig, bol) => println!("signal: {} {} {}", pid, sig, bol),
             _ => (),
         };
         let regs = catch_exit!(ptrace::getregs(pid));
         // println!("Syscall n°: {}", regs.orig_rax);
-        match syscall::SystemCall::from_regs(regs.orig_rax, regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9) {
-            Some(call) => {
-                println!("{:?}", std::env::current_dir())
-            },
-            None => (),
-        };
+        let result: Option<Result<()>> = syscall::SystemCall::from_regs(regs.orig_rax, regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9).map(|call| {
+            match call {
+                SystemCall::Write(info) => syscall::write_syscall(info, pid, oplog)?,
+                SystemCall::Creat(info) => syscall::creat_syscall(info, pid, oplog),
+                SystemCall::Open(info) => syscall::open_syscall(info, pid, oplog),
+                SystemCall::Unlink(info) => syscall::unlink_syscall(info, pid, oplog)?,
+                _ => (),
+            };
+            Ok(())
+        });
+        if let Some(Err(e)) = result {
+            warn!("There was an error while running syscall: {:?}", e);              
+        }
 
         ptrace::syscall(pid, None).context("Couldn't resume from syscall")?;
         wait::waitpid(pid, None)?;
@@ -83,7 +94,7 @@ fn main() -> Result<()> {
     ).get_matches();
 
     let mut oplog = OperationLogger::new();
-    logs::init_logger(matches.is_present("DEBUG"))?;
+    mylog::init_logger(matches.is_present("DEBUG"))?;
 
     let program = matches.values_of("PROGRAM").unwrap(); // Can't fail.
     match unistd::fork().context("Couldn't fork")? {

@@ -47,6 +47,10 @@ tp_table = {
     "void": RType("i8").unsigned_name("u8")
 }
 
+''' This function is really lacking and still doesn't do mutable and consts right.
+    I'm planing on rewriting everything here, making my own c function parameter parser im ruby,
+     as can be seen on ctor.rb, but I have zero idea of how parsing works, so...
+'''
 def transform(decl):
     def const(d):
         if "const" in d.quals:
@@ -64,7 +68,7 @@ def transform(decl):
         return ["*", const(decl)] + transform(decl.type)
     elif tp == c_ast.TypeDecl:
         tp = decl.type.names
-        return [tp_table.get(tp[-1]).get(len(tp) > 1 and tp[1] == "unsigned")]
+        return [tp_table[tp[-1]].get(len(tp) > 1 and tp[1] == "unsigned")]
 
 regs = [
     "rdi",

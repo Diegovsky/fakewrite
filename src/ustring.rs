@@ -14,6 +14,7 @@ use std::mem;
 /// let ust = UString::from(&cst);  
 /// assert_eq!(Path::new("ustring.txt"), ust.as_ref());
 /// ```
+
 pub struct UString {
     buf: Vec<u8>,
 }
@@ -50,16 +51,12 @@ impl UString {
     pub fn from_os_str<O: AsRef<OsStr>>(ost: O) -> Self {
         let ost = ost.as_ref();
         let st = ost.to_string_lossy().into_owned();
-        Self {
-            buf: st.into_bytes(),
-        }
+        Self::from_vec(st.into_bytes())
     }
     pub fn from_c_str<C: AsRef<CStr>>(cst: C) -> Self {
         let cst = cst.as_ref();
         let st = cst.to_string_lossy().into_owned();
-        Self {
-            buf: st.into_bytes(),
-        }
+        Self::from_vec(st.into_bytes())
     }
     pub fn from_str<C: AsRef<str>>(st: C) -> Self {
         let st = st.as_ref();
@@ -79,7 +76,7 @@ impl UString {
     }
     pub fn as_path(&self) -> &Path {
         // This is "safe" because both types have the same memory layout.
-        unsafe { mem::transmute(self.as_os_str()) }
+        Path::new(self.as_os_str())
     }
 }
 // Trait implementations of UString::from_x_str
