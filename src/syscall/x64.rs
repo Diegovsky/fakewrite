@@ -2,7 +2,7 @@
 use super::common::*;
 
 impl SystemCall {
-	pub fn from_regs(rax: u64, rdi: u64, rsi: u64, rdx: u64, r10: u64, r8: u64, r9: u64) -> Option<SystemCall> {
+	pub fn from_regs(rax: u64, rdi: u64, rsi: u64, rdx: u64, r10: u64, _r8: u64, _r9: u64) -> Option<SystemCall> {
 		 let call = match rax {
 			0 => SystemCall::Read(Read{fd: rdi as i32, buf: rsi as * mut i8, count: rdx as i64}),
 			1 => SystemCall::Write(Write{fd: rdi as i32, buf: rsi as * mut i8, count: rdx as i64}),

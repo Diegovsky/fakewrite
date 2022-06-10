@@ -22,10 +22,3 @@ fn ustring_as_os_str() {
     let ust = UString::from(st);
     assert_eq!(ust.as_os_str(), OsStr::new(st));
 }
-
-#[test]
-fn ustring_as_path() {
-    let st = Path::new("This is a test");
-    let ust = UString::from(st);
-    assert_eq!(ust.as_path(), st);
-}

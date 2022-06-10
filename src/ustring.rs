@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+
 use std::ffi::{CStr, OsStr};
 use std::path::Path;
 
@@ -135,7 +135,7 @@ impl_conversion! {
 }
 
 use std::fmt;
-use std::str::Utf8Error;
+
 
 impl fmt::Debug for UString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

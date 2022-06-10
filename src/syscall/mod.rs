@@ -48,14 +48,14 @@ pub fn open_syscall(info: Open, pid: Pid, oplog: &mut OperationLogger) {
         oplog.log(fpath, Op::Created);
     }
 }
-pub fn openat_syscall(info: Openat, pid: Pid, oplog: &mut OperationLogger) {
+pub fn openat_syscall(_info: Openat, _pid: Pid, _oplog: &mut OperationLogger) {
 
 }
 /// This function handles the `unlink` Linux system call
 pub(crate) fn unlink_syscall(unlink: Unlink, pid: Pid, logger: &mut OperationLogger) -> Result<()> {
     let filename = read_string_from_proc(unlink.pathname as *const u8, pid);
     filename.as_path().canonicalize()
-        .map(|p| logger.log(filename, Op::Deleted))?;
+        .map(|_p| logger.log(filename, Op::Deleted))?;
     Ok(())
 }
 
