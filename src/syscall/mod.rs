@@ -21,7 +21,7 @@ use common::*;
 macro_rules! catch_exit {
     ($res:expr) => {
         match $res {
-            Err(Error::Sys(Errno::ESRCH)) => {
+            Err(Errno::ESRCH) => {
                 break;
             }
             Ok(val) => val,

@@ -97,7 +97,7 @@ fn main() -> Result<()> {
     mylog::init_logger(matches.is_present("DEBUG"))?;
 
     let program = matches.values_of("PROGRAM").unwrap(); // Can't fail.
-    match unistd::fork().context("Couldn't fork")? {
+    match unsafe { unistd::fork().context("Couldn't fork") }? {
         ForkResult::Child => child(program).context("Couldn't run child")?,
         ForkResult::Parent { child } => {
             tracer(child, &mut oplog).context("Couldn't run tracer")?
