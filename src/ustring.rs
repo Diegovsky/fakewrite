@@ -8,6 +8,7 @@ use std::mem;
 /// A String type to help with type conversion between the string types.
 /// # Fields
 /// * `buf` Buf always ends with a trailing 0 to costlessly borrow as CStr.
+/// Note: Both the `&str` and `String` conversions exclude the traling 0.
 /// # Examples
 /// ```
 /// let cst = CString::new("ustring.txt").unwrap();
@@ -32,15 +33,31 @@ impl UString {
             buf: Vec::with_capacity(cap),
         }
     }
-    /// This function gets a UTF-8 bytes vec and appends a 0 to it.
-    /// As with [`from_slice`], this does not check for UTF-8 validity.
-    pub fn from_vec(mut buf: Vec<u8>) -> Self {
-        buf.push(0);
-        Self { buf: buf }
+
+    /// If the contents are all valid UTF-8, it's basically a no-op (see [`from_vec_unchecked`]).
+    /// Otherwise, performs a lossy conversion of the bytes into UTF-8.
+    pub fn from_vec(buf: Vec<u8>) -> Self {
+        match String::from_utf8(buf) {
+            Ok(buf) => unsafe { Self::from_vec_unchecked(buf.into_bytes()) }
+            Err(e) => Self::from_slice(e.as_bytes()),
+        }
     }
+    /// This function assumes the content is UTF-8 encoded and appends a 0 to it.
+    /// This does not check for UTF-8 validity, so you should use [`from_vec`] instead.
+    pub unsafe fn from_vec_unchecked(mut buf: Vec<u8>) -> Self {
+        buf.push(0);
+        Self { buf }
+    }
+
+    /// Performs a lossy conversion of the slice into UTF-8
+    pub fn from_slice(slc: &[u8]) -> Self {
+        let st = String::from_utf8_lossy(slc).into_owned().into_bytes();
+        unsafe { Self::from_vec_unchecked(st) }
+    }
+
     /// This function gets a UTF-8 slice and appends a 0 to it.
-    /// Note that it does not check for validity.
-    fn from_slice(slc: &[u8]) -> Self {
+    /// Note that it does not check for UTF-8 validity.
+    unsafe fn from_slice_unchecked(slc: &[u8]) -> Self {
         let len = slc.len();
 
         let mut ust = Self::with_capacity(len + 1);
@@ -51,16 +68,16 @@ impl UString {
     pub fn from_os_str<O: AsRef<OsStr>>(ost: O) -> Self {
         let ost = ost.as_ref();
         let st = ost.to_string_lossy().into_owned();
-        Self::from_vec(st.into_bytes())
+        unsafe { Self::from_vec_unchecked(st.into_bytes()) }
     }
     pub fn from_c_str<C: AsRef<CStr>>(cst: C) -> Self {
         let cst = cst.as_ref();
         let st = cst.to_string_lossy().into_owned();
-        Self::from_vec(st.into_bytes())
+        unsafe { Self::from_vec_unchecked(st.into_bytes()) }
     }
     pub fn from_str<C: AsRef<str>>(st: C) -> Self {
         let st = st.as_ref();
-        Self::from_slice(st.as_bytes())
+        unsafe { Self::from_slice_unchecked(st.as_bytes()) }
     }
     pub fn as_c_str(&self) -> &CStr {
         // This is "safe" because both types have the same memory layout.
@@ -79,35 +96,46 @@ impl UString {
         Path::new(self.as_os_str())
     }
 }
-// Trait implementations of UString::from_x_str
-impl From<&OsStr> for UString {
-    fn from(ost: &OsStr) -> Self {
-        Self::from_os_str(ost)
-    }
+
+macro_rules! impl_as_ref {
+    ($method:ident, $name:ident) => {
+        impl AsRef<$name> for UString {
+            fn as_ref(&self) -> &$name {
+                self.$method()
+            }
+        }
+    };
 }
-impl From<&CStr> for UString {
-    fn from(cst: &CStr) -> Self {
-        Self::from_c_str(cst)
-    }
+
+macro_rules! impl_from {
+    ($method:ident, $name:ident) => {
+        impl From<&$name> for UString {
+            fn from(st: &$name) -> Self {
+                Self::$method(st)
+            }
+        }
+    };
 }
-impl From<&str> for UString {
-    fn from(st: &str) -> Self {
-        Self::from_str(st)
-    }
-}
-impl From<&Path> for UString {
-    fn from(p: &Path) -> Self {
-        Self::from_os_str(p)
+
+macro_rules! impl_conversion {
+    ($from:ident, $as_ref:ident, $name:ident) => {
+        impl_from!($from, $name);
+        impl_as_ref!($as_ref, $name);
+    };
+    ($($from:ident, $as_ref:ident, $name:ident);*) => {
+        $(impl_conversion!($from, $as_ref, $name);)*
     }
 }
 
-impl AsRef<Path> for UString {
-    fn as_ref(&self) -> &Path {
-        self.as_path()
-    }
+// Thanks to this macro, implementing conversions is made very easy.
+impl_conversion! {
+    from_c_str,   as_c_str,   CStr;
+    from_os_str,  as_os_str,  OsStr;
+    from_str,     as_str,     str
 }
 
-use std::fmt::{self};
+use std::fmt;
+use std::str::Utf8Error;
 
 impl fmt::Debug for UString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

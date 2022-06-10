@@ -14,27 +14,26 @@ def get_cwd(filename=""):
 
 get_cwd.value = None
 
-def parse(args: str):
+def parse_type(args: str):
     parser = c_parser.CParser()
     args = args.replace("ssize_t", "long").replace("size_t", "unsigned long")
     node = parser.parse("{};".format(args))
     
-    # print(type(node))
-    if(not isinstance(node, c_ast.FileAST)):
-        raise Exception("Gay")
+    assert isinstance(node, c_ast.FileAST)
+
     dec = node.ext[0]
     return transform(dec)
 
 class RType:
     def __init__(self, name):
         self.name = name
-        self.uname = name,
+        self.uname = name
     
     def unsigned_name(self, uname):
         self.uname = uname
         return self
     
-    def get(self, uname):
+    def get(self, uname) -> str:
         if uname:
             return self.uname
         else:
@@ -51,24 +50,24 @@ tp_table = {
     I'm planing on rewriting everything here, making my own c function parameter parser im ruby,
      as can be seen on ctor.rb, but I have zero idea of how parsing works, so...
 '''
-def transform(decl):
+def transform(decl: c_ast.Node) -> list[str]:
     def const(d):
         if "const" in d.quals:
             return "const"
         else:
             return "mut"
     
-    tp = type(decl)
-    # print(tp)
-    if tp == c_ast.Decl:
+    if isinstance(decl, c_ast.Decl):
         return [decl.name + ":"] + transform(decl.type)
-    if tp == c_ast.ArrayDecl:
+    if isinstance(decl, c_ast.ArrayDecl):
         return ["*", "const"] + transform(decl.type)
-    elif tp == c_ast.PtrDecl:
+    elif isinstance(decl, c_ast.PtrDecl):
         return ["*", const(decl)] + transform(decl.type)
-    elif tp == c_ast.TypeDecl:
-        tp = decl.type.names
-        return [tp_table[tp[-1]].get(len(tp) > 1 and tp[1] == "unsigned")]
+    elif isinstance(decl, c_ast.TypeDecl):
+        names: list[str] = decl.type.names
+        return [tp_table[names[-1]].get(len(names) >= 2 and names[1] == "unsigned")]
+    else:
+        return []
 
 regs = [
     "rdi",
@@ -80,7 +79,7 @@ regs = [
 ]
 
 class SyscallVariant:
-    def __init__(self, name: str, args: [[str]], number, stname: str):
+    def __init__(self, name: str, args: list[list[str]], number: str, stname: str):
         self.name = name
         self.args = args
         self.stname = stname
@@ -119,30 +118,32 @@ class SyscallVariant:
         
         return [f"{self.number} => {self.stname}::{self.name}{fmt_args},\n"]
 
-def into_rust(stname:str, call_list:[str], output:str):
-    with open(get_cwd("c syscalls.yaml")) as y:
-        failed = []
-        calls = []
-        for call, args in yaml.full_load(y).items():
-            if not call in call_list:
+def into_rust(yaml_path: str, stname:str, call_list: list[str], output:str):
+    with open(get_cwd(yaml_path)) as y:
+        failed: list[tuple[str, Exception]] = []
+        calls: list[SyscallVariant] = []
+        for func_name, args in yaml.full_load(y).items():
+            if not func_name in call_list:
                 continue
             try:
-                rust_args = [parse(arg) for arg in args["args"]]
-                call_name = ''.join(map(str.capitalize, call.split('_')))
+                print(func_name, args)
+                rust_args = [parse_type(arg) for arg in args["args"]]
+                # Rough snake_case to CamelCase operation.
+                call_name = ''.join(map(str.capitalize, func_name.split('_')))
 
                 calls.append(SyscallVariant(call_name, rust_args, args["n"], stname))
 
             except Exception as e:
-                failed.append(call, e)
+                failed.append((func_name, e))
         
         if len(failed) > 0:
             print("Could not parse syscalls: {}".format(failed))
 
         lines = {"structs": [], "variants": [], "from_regs": []}
-        for call in calls:
-            lines["structs"].extend(call.struct())
-            lines["variants"].extend(call.enum())
-            lines["from_regs"].extend(call.from_regs())
+        for func_name in calls:
+            lines["structs"].extend(func_name.struct())
+            lines["variants"].extend(func_name.enum())
+            lines["from_regs"].extend(func_name.from_regs())
 
         with open(output, "w") as out:
             out.writelines(lines["structs"])
@@ -183,15 +184,21 @@ wanted_syscalls = [
 ]
 
 parser = argparse.ArgumentParser()
-parser.add_argument("stname", type=str)
-parser.add_argument("out", type=str)
-parser.add_argument("calls", nargs="+")
+parser.add_argument("yaml", type=str, metavar='syscalls.yaml')
+parser.add_argument("stname", type=str, metavar='struct name')
+parser.add_argument("out", type=str, metavar='output file')
+parser.add_argument("calls", nargs="?", default=wanted_syscalls)
 args = parser.parse_args()
 
-with open("out.log", "w") as debug:
+with open('./out.log', "w") as debug:
     debug.write("Out file: {}\nStruct name: {}\nCalls: {}\n".format(args.out, args.stname, args.calls))
+    stdout = sys.stdout
+    stderr = sys.stderr
+    sys.stdout = debug
+    sys.stderr = debug
     try:
-        into_rust(stname=args.stname, call_list=args.calls, output=args.out)
+        into_rust(yaml_path=args.yaml, stname=args.stname, call_list=args.calls, output=args.out)
     except Exception as e:
+        print('Something unexpected happened, see out.log', file=stderr)
         debug.write(str(e))
     

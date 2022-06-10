@@ -32,7 +32,7 @@ fstat:
   n: 5
 lstat:
   args:
-  - fconst char *filename
+  - const char *filename
   - struct stat *statbuf
   n: 6
 poll:

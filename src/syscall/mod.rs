@@ -10,9 +10,12 @@ use crate::operations::*;
 use crate::ustring::*;
 // use crate::mylog::prelude::*;
 
-mod system;
+mod common;
+#[cfg(target_arch="x86_64")]
+mod x64;
 
-include!(concat!(env!("OUT_DIR"), "/systemcalls.rs"));
+pub use common::SystemCall;
+use common::*;
 
 #[macro_export]
 macro_rules! catch_exit {
@@ -80,10 +83,11 @@ pub(crate) fn solve_path<P: AsRef<Path>>(path: P) -> anyhow::Result<PathBuf> {
     Ok(buf)
 }
 
+/// Allows the parent process to read the child's memory more easily.
 struct DataIterator {
     pid: Pid,
     ptr: *const u8,
-    value: usize,
+    value_read: usize,
     index: usize,
     size: Option<usize>
 }
@@ -92,9 +96,9 @@ impl DataIterator {
     pub fn new(ptr: *const u8, size: impl Into<Option<usize>>, pid: Pid) -> DataIterator {
         Self {
             pid,
-            ptr: ptr,
+            ptr,
             index: 0,
-            value: 0,
+            value_read: 0,
             size: size.into()
         }
     }
@@ -108,10 +112,10 @@ impl Iterator for DataIterator {
         let i = self.index % Self::WORD_SIZE;
         if i == 0 {
             unsafe {
-                self.value = ptrace::read(self.pid, self.ptr.add(self.index) as *mut _).ok()? as usize;
+                self.value_read = ptrace::read(self.pid, self.ptr.add(self.index) as *mut _).ok()? as usize;
             }
         }
-        let r = (self.value >> 8*i) as u8;
+        let r = (self.value_read >> 8*i) as u8;
         self.index += 1;
         Some(r)
     }

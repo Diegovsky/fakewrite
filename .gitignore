@@ -1,6 +1,4 @@
 Cargo.lock
-
-/target/
-
+target/
 out.log
 *.out
